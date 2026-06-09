@@ -39,8 +39,10 @@ import org.apache.seatunnel.connectors.cdc.debezium.DeserializeFormat;
 import org.apache.seatunnel.connectors.cdc.debezium.row.DebeziumJsonDeserializeSchema;
 import org.apache.seatunnel.connectors.cdc.debezium.row.SeaTunnelRowDebeziumDeserializeSchema;
 import org.apache.seatunnel.connectors.seatunnel.cdc.mysql.config.MySqlIncrementalSourceOptions;
+import org.apache.seatunnel.connectors.seatunnel.cdc.mysql.config.MySqlSourceConfig;
 import org.apache.seatunnel.connectors.seatunnel.cdc.mysql.config.MySqlSourceConfigFactory;
 import org.apache.seatunnel.connectors.seatunnel.cdc.mysql.source.offset.BinlogOffsetFactory;
+import org.apache.seatunnel.connectors.seatunnel.cdc.mysql.utils.MySqlCatalogTableUtils;
 import org.apache.seatunnel.connectors.seatunnel.jdbc.config.JdbcCommonOptions;
 
 import org.apache.kafka.connect.data.Struct;
@@ -84,6 +86,8 @@ public class MySqlIncrementalSource<T> extends IncrementalSource<T, JdbcSourceCo
     public SourceConfig.Factory<JdbcSourceConfig> createSourceConfigFactory(ReadonlyConfig config) {
         MySqlSourceConfigFactory configFactory = new MySqlSourceConfigFactory();
         configFactory.serverId(config.get(JdbcSourceOptions.SERVER_ID));
+        configFactory.scanBinlogNewlyAddedTableEnabled(
+                config.get(MySqlIncrementalSourceOptions.SCAN_BINLOG_NEWLY_ADDED_TABLE_ENABLED));
         configFactory.fromReadonlyConfig(readonlyConfig);
         JdbcUrlUtil.UrlInfo urlInfo = JdbcUrlUtil.getUrlInfo(config.get(JdbcCommonOptions.URL));
         configFactory.originUrl(urlInfo.getOrigin());
@@ -109,6 +113,7 @@ public class MySqlIncrementalSource<T> extends IncrementalSource<T, JdbcSourceCo
         }
 
         String zoneId = config.get(JdbcSourceOptions.SERVER_TIME_ZONE);
+        MySqlSourceConfig sourceConfig = ((MySqlSourceConfigFactory) configFactory).create(0);
         return (DebeziumDeserializationSchema<T>)
                 SeaTunnelRowDebeziumDeserializeSchema.builder()
                         .setTables(catalogTables)
@@ -116,6 +121,15 @@ public class MySqlIncrementalSource<T> extends IncrementalSource<T, JdbcSourceCo
                         .setTableIdTableChangeMap(tableIdTableChangeMap)
                         .setSchemaChangeResolver(
                                 new MySqlSchemaChangeResolver(createSourceConfigFactory(config)))
+                        .setScanBinlogNewlyAddedTableEnabled(
+                                config.get(
+                                        MySqlIncrementalSourceOptions
+                                                .SCAN_BINLOG_NEWLY_ADDED_TABLE_ENABLED))
+                        .setTableChangeCatalogTableConverter(
+                                tableChange ->
+                                        MySqlCatalogTableUtils.toCatalogTable(
+                                                tableChange.getTable(),
+                                                sourceConfig.getDbzConnectorConfig()))
                         .build();
     }
 
@@ -128,6 +142,15 @@ public class MySqlIncrementalSource<T> extends IncrementalSource<T, JdbcSourceCo
     public OffsetFactory createOffsetFactory(ReadonlyConfig config) {
         return new BinlogOffsetFactory(
                 (MySqlSourceConfigFactory) configFactory, (MySqlDialect) dataSourceDialect);
+    }
+
+    /**
+     * Uses the MySQL CDC compatibility switch to decide whether restore should append newly
+     * discovered tables into the snapshot phase.
+     */
+    @Override
+    protected boolean isScanNewlyAddedTableEnabledOnRestore() {
+        return readonlyConfig.get(MySqlIncrementalSourceOptions.SCAN_NEWLY_ADDED_TABLE_ENABLED);
     }
 
     private Map<TableId, Struct> tableChanges() {

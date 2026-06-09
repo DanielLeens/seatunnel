@@ -77,6 +77,8 @@ public class MySqlIncrementalSourceFactory extends BaseChangeStreamTableSourceFa
                         MySqlIncrementalSourceOptions.INVERSE_SAMPLING_RATE,
                         MySqlIncrementalSourceOptions.TABLE_NAMES_CONFIG,
                         MySqlIncrementalSourceOptions.SCHEMA_CHANGES_ENABLED,
+                        MySqlIncrementalSourceOptions.SCAN_NEWLY_ADDED_TABLE_ENABLED,
+                        MySqlIncrementalSourceOptions.SCAN_BINLOG_NEWLY_ADDED_TABLE_ENABLED,
                         MySqlIncrementalSourceOptions.INT_TYPE_NARROWING)
                 .optional(
                         MySqlIncrementalSourceOptions.STARTUP_MODE,
