@@ -24,6 +24,7 @@ import lombok.extern.slf4j.Slf4j;
 
 import java.util.Map;
 import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 
 @Slf4j
@@ -37,7 +38,7 @@ public class MultiTableWriterRunnable implements Runnable {
     public MultiTableWriterRunnable(
             Map<String, SinkWriter<SeaTunnelRow, ?, ?>> tableIdWriterMap,
             BlockingQueue<SeaTunnelRow> queue) {
-        this.tableIdWriterMap = tableIdWriterMap;
+        this.tableIdWriterMap = new ConcurrentHashMap<>(tableIdWriterMap);
         this.queue = queue;
     }
 
@@ -94,5 +95,10 @@ public class MultiTableWriterRunnable implements Runnable {
 
     public String getCurrentTableId() {
         return currentTableId;
+    }
+
+    /** Registers a sink writer for a table discovered after the runnable has already started. */
+    public void registerWriter(String tableId, SinkWriter<SeaTunnelRow, ?, ?> sinkWriter) {
+        tableIdWriterMap.put(tableId, sinkWriter);
     }
 }

@@ -21,6 +21,8 @@ import org.apache.seatunnel.api.sink.MultiTableResourceManager;
 import org.apache.seatunnel.api.sink.SinkWriter;
 import org.apache.seatunnel.api.sink.SupportMultiTableSinkWriter;
 import org.apache.seatunnel.api.sink.SupportSchemaEvolutionSinkWriter;
+import org.apache.seatunnel.api.table.catalog.CatalogTable;
+import org.apache.seatunnel.api.table.schema.event.CreateTableEvent;
 import org.apache.seatunnel.api.table.schema.event.SchemaChangeEvent;
 import org.apache.seatunnel.api.table.type.SeaTunnelRow;
 import org.apache.seatunnel.api.tracing.MDCTracer;
@@ -51,7 +53,8 @@ public class MultiTableSinkWriter
 
     private final Map<SinkIdentifier, SinkWriter<SeaTunnelRow, ?, ?>> sinkWriters;
     private final Map<SinkIdentifier, SinkWriter.Context> sinkWritersContext;
-    private final Map<String, Optional<Integer>> sinkPrimaryKeys = new HashMap<>();
+    private final ConcurrentMap<String, Optional<Integer>> sinkPrimaryKeys =
+            new ConcurrentHashMap<>();
     private final List<ConcurrentMap<SinkIdentifier, SinkWriter<SeaTunnelRow, ?, ?>>>
             sinkWritersWithIndex;
     private final List<MultiTableWriterRunnable> runnable = new ArrayList<>();
@@ -145,6 +148,9 @@ public class MultiTableSinkWriter
     @Override
     public void applySchemaChange(SchemaChangeEvent event) throws IOException {
         subSinkErrorCheck();
+        if (event instanceof CreateTableEvent) {
+            registerNewlyCreatedTable((CreateTableEvent) event);
+        }
         for (int i = 0; i < sinkWritersWithIndex.size(); i++) {
             for (Map.Entry<SinkIdentifier, SinkWriter<SeaTunnelRow, ?, ?>> sinkWriterEntry :
                     sinkWritersWithIndex.get(i).entrySet()) {
@@ -171,6 +177,81 @@ public class MultiTableSinkWriter
                             sinkWriterEntry.getKey().getTableIdentifier(),
                             sinkWriterEntry.getKey().getIndex());
                 }
+            }
+        }
+    }
+
+    /**
+     * Creates one per-queue sink writer for a table discovered after job startup.
+     *
+     * <p>The table identifier stored in the multi-table writer map always follows the upstream
+     * source table path. Individual sink writers are responsible for translating it to their
+     * physical target naming rules.
+     */
+    private void registerNewlyCreatedTable(CreateTableEvent event) throws IOException {
+        CatalogTable catalogTable = event.getChangeAfter();
+        if (catalogTable == null) {
+            throw new IOException(
+                    "CreateTableEvent must carry changeAfter when registering a new sink writer");
+        }
+        String tableIdentifier = event.tablePath().getFullName();
+        for (int i = 0; i < sinkWritersWithIndex.size(); i++) {
+            synchronized (runnable.get(i)) {
+                Map.Entry<SinkIdentifier, SinkWriter<SeaTunnelRow, ?, ?>> templateEntry =
+                        sinkWritersWithIndex.get(i).entrySet().stream().findFirst().orElse(null);
+                if (templateEntry == null) {
+                    throw new IOException(
+                            "Cannot register newly created table because no template sink writer exists");
+                }
+                SinkIdentifier sinkIdentifier =
+                        SinkIdentifier.of(tableIdentifier, templateEntry.getKey().getIndex());
+                if (sinkWritersWithIndex.get(i).containsKey(sinkIdentifier)) {
+                    continue;
+                }
+                SinkWriter<SeaTunnelRow, ?, ?> templateWriter = templateEntry.getValue();
+                if (!(templateWriter instanceof SupportMultiTableSinkWriter)
+                        || !((SupportMultiTableSinkWriter<?>) templateWriter)
+                                .supportsNewlyCreatedTable()) {
+                    throw new IOException(
+                            String.format(
+                                    "Sink writer %s does not support runtime newly created tables for %s",
+                                    templateWriter.getClass().getName(), tableIdentifier));
+                }
+                SinkWriter.Context baseContext =
+                        sinkWritersContext.getOrDefault(
+                                templateEntry.getKey(),
+                                sinkWritersContext.values().stream()
+                                        .findFirst()
+                                        .orElseThrow(
+                                                () ->
+                                                        new IllegalStateException(
+                                                                "Missing sink writer context")));
+                SinkWriter.Context context =
+                        new SinkContextProxy(
+                                templateEntry.getKey().getIndex(),
+                                sinkWritersWithIndex.size(),
+                                baseContext);
+                SinkWriter<SeaTunnelRow, ?, ?> newWriter =
+                        ((SupportMultiTableSinkWriter<?>) templateWriter)
+                                .createSinkWriter(catalogTable, context);
+                if (!(newWriter instanceof SupportMultiTableSinkWriter)) {
+                    throw new IOException(
+                            String.format(
+                                    "New sink writer %s must implement SupportMultiTableSinkWriter",
+                                    newWriter.getClass().getName()));
+                }
+                ((SupportMultiTableSinkWriter<?>) newWriter)
+                        .setMultiTableResourceManager(resourceManager, i);
+                sinkWriters.put(sinkIdentifier, newWriter);
+                sinkWritersWithIndex.get(i).put(sinkIdentifier, newWriter);
+                sinkWritersContext.put(sinkIdentifier, baseContext);
+                runnable.get(i).registerWriter(tableIdentifier, newWriter);
+                sinkPrimaryKeys.put(
+                        tableIdentifier, ((SupportMultiTableSinkWriter<?>) newWriter).primaryKey());
+                log.info(
+                        "Registered runtime sink writer for newly created table {} on sub-writer {}",
+                        tableIdentifier,
+                        i);
             }
         }
     }

@@ -18,6 +18,7 @@
 package org.apache.seatunnel.api.event;
 
 public enum EventType {
+    SCHEMA_CHANGE_CREATE_TABLE,
     SCHEMA_CHANGE_ADD_COLUMN,
     SCHEMA_CHANGE_DROP_COLUMN,
     SCHEMA_CHANGE_MODIFY_COLUMN,
