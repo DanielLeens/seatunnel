@@ -295,6 +295,9 @@ public class SavePointBusySourceTest extends AbstractSeaTunnelServerTest<SavePoi
                                         server.getCoordinatorService().getJobStatus(jobId)));
 
         JobMaster jobMaster = server.getCoordinatorService().getJobMaster(jobId);
+        // Only override a coordinator that has completed its normal task-ready handshake. This
+        // keeps the retry focused on the savepoint precondition instead of racing task startup.
+        awaitCheckpointCoordinatorsReady(jobMaster);
         setCheckpointCoordinatorsReady(jobMaster, false);
 
         PassiveCompletableFuture<Void> savepointFuture =
