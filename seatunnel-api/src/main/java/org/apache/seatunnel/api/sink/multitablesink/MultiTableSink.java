@@ -291,10 +291,10 @@ public class MultiTableSink
      * Builds a unique key for a destination table and replica index, used for writer deduplication.
      */
     private String getDestinationKey(TablePath tablePath, int replicaIndex) {
-        SeaTunnelSink sink = sinks.get(tablePath);
+        SeaTunnelSink<?, ?, ?, ?> sink = sinks.get(tablePath);
         String destTable =
                 sink.getWriteCatalogTable()
-                        .map(t -> ((CatalogTable) t).getTablePath().toString())
+                        .map(table -> table.getTablePath().toString())
                         .orElse(tablePath.toString());
         return destTable + "_" + replicaIndex;
     }
