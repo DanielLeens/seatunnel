@@ -469,11 +469,6 @@ public class ZetaSQLType {
             case ZetaSQLFunction.DATEADD:
             case ZetaSQLFunction.TIMESTAMPADD:
             case ZetaSQLFunction.ROUND:
-            case ZetaSQLFunction.CEIL:
-            case ZetaSQLFunction.CEILING:
-            case ZetaSQLFunction.FLOOR:
-            case ZetaSQLFunction.TRUNC:
-            case ZetaSQLFunction.TRUNCATE:
             case ZetaSQLFunction.NULLIF:
                 return getExpressionType(function.getParameters().getExpressions().get(0));
             case ZetaSQLFunction.IFNULL:
