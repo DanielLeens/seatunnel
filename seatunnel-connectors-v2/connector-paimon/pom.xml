@@ -126,6 +126,26 @@
                     </execution>
                 </executions>
             </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <configuration>
+                    <!--
+                        PaimonSecurityContext directly imports sun.security.krb5.Config/
+                        KrbException to reflectively refresh Kerberos configuration at runtime.
+                        That package is encapsulated by the JDK module system starting with JDK 9,
+                        so compiling this module under this project's JDK 11 baseline needs the
+                        same export the runtime already requires; JAVA_TOOL_OPTIONS at the
+                        workflow level does not reach an in-process javac invocation the way
+                        Surefire/Failsafe's argLine does not reach it either, so this module needs
+                        its own compiler-level flag rather than relying on either of those. See
+                        config/jvm_options for the corresponding runtime-side flags.
+                    -->
+                    <compilerArgs>
+                        <arg>--add-exports=java.security.jgss/sun.security.krb5=ALL-UNNAMED</arg>
+                    </compilerArgs>
+                </configuration>
+            </plugin>
         </plugins>
     </build>
 

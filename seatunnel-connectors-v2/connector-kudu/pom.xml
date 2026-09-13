@@ -69,4 +69,32 @@
             </exclusions>
         </dependency>
     </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <configuration>
+                    <!--
+                        KuduUtil directly imports sun.security.krb5.Config/KrbException to
+                        reflectively refresh Kerberos configuration at runtime, and
+                        KuduSourceSplitEnumeratorTest directly imports sun.misc.Unsafe. Both
+                        packages are encapsulated by the JDK module system starting with JDK 9, so
+                        compiling this module (main and test sources) under this project's JDK 11
+                        baseline needs the same exports the runtime already requires;
+                        JAVA_TOOL_OPTIONS at the workflow level does not reach an in-process javac
+                        invocation the way Surefire/Failsafe's argLine does not reach it either, so
+                        this module needs its own compiler-level flags rather than relying on
+                        either of those. See config/jvm_options for the corresponding runtime-side
+                        flags.
+                    -->
+                    <compilerArgs>
+                        <arg>--add-exports=java.security.jgss/sun.security.krb5=ALL-UNNAMED</arg>
+                        <arg>--add-exports=java.base/sun.misc=ALL-UNNAMED</arg>
+                    </compilerArgs>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
 </project>
