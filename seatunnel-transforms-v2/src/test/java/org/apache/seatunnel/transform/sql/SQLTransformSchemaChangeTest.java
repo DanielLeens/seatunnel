@@ -34,6 +34,7 @@ import org.apache.seatunnel.api.table.schema.event.AlterTableDropColumnEvent;
 import org.apache.seatunnel.api.table.schema.event.AlterTableEvent;
 import org.apache.seatunnel.api.table.schema.event.AlterTableModifyColumnEvent;
 import org.apache.seatunnel.api.table.schema.event.AlterTableNameEvent;
+import org.apache.seatunnel.api.table.schema.event.RestoreTableSchemaEvent;
 import org.apache.seatunnel.api.table.schema.event.SchemaChangeEvent;
 import org.apache.seatunnel.api.table.schema.handler.AlterTableSchemaEventHandler;
 import org.apache.seatunnel.api.table.type.BasicType;
@@ -63,8 +64,8 @@ import java.util.concurrent.atomic.AtomicInteger;
  * Covers the SQL transform's schema change translation end to end: output-relative events for star
  * projections, projections, aliases and derived columns, absorbed changes, fail-fast cases, lineage
  * through composites, staged engine hand-offs at chain positions greater than zero, the multi-table
- * wrapper with several rules per table, resynchronisation events and the engine and UDF lifecycle
- * across changes.
+ * wrapper with several rules per table, restore events and the engine and UDF lifecycle across
+ * changes.
  */
 public class SQLTransformSchemaChangeTest {
 
@@ -528,20 +529,14 @@ public class SQLTransformSchemaChangeTest {
     }
 
     @Test
-    public void testResyncFromEventCarryingTheWholeTable() {
+    public void testRestoreEventResynchronisesWithoutDdl() {
         SQLTransform transform = transform("select * from products", baseTable());
-        AlterTableEvent resync =
-                new AlterTableEvent(TID) {
-                    @Override
-                    public EventType getEventType() {
-                        return EventType.SCHEMA_CHANGE_UPDATE_COLUMNS;
-                    }
-                };
-        resync.setChangeAfter(apply(baseTable(), composite(addAge())));
+        RestoreTableSchemaEvent restore =
+                new RestoreTableSchemaEvent(apply(baseTable(), composite(addAge())));
 
-        SchemaChangeEvent out = transform.mapSchemaChangeEvent(resync);
+        SchemaChangeEvent out = transform.mapSchemaChangeEvent(restore);
 
-        Assertions.assertSame(resync, out);
+        Assertions.assertSame(restore, out);
         Assertions.assertSame(transform.getProducedCatalogTable(), out.getChangeAfter());
         Assertions.assertArrayEquals(
                 new String[] {"id", "name", "weight", "age"},
@@ -549,6 +544,42 @@ public class SQLTransformSchemaChangeTest {
         List<SeaTunnelRow> rows =
                 transform.flatMap(new SeaTunnelRow(new Object[] {1L, "a", 1.0d, 20}));
         Assertions.assertEquals(4, rows.get(0).getArity());
+
+        // At a chain position greater than zero the engine hands the upstream restored table over
+        // first; the restore event must then carry the same schema.
+        SQLTransform staged = transform("select * from products", baseTable());
+        CatalogTable handed = apply(baseTable(), composite(addAge()));
+        staged.setInputCatalogTable(handed);
+        SchemaChangeEvent stagedOut =
+                staged.mapSchemaChangeEvent(new RestoreTableSchemaEvent(handed));
+        Assertions.assertSame(staged.getProducedCatalogTable(), stagedOut.getChangeAfter());
+        Assertions.assertArrayEquals(
+                new String[] {"id", "name", "weight", "age"},
+                staged.getProducedCatalogTable().getTableSchema().getFieldNames());
+    }
+
+    @Test
+    public void testUnknownTableLevelEventFailsFastEvenWithChangeAfter() {
+        SQLTransform transform = transform("select * from products", baseTable());
+        TableSchema before = transform.getProducedCatalogTable().getTableSchema();
+        AlterTableEvent unknown =
+                new AlterTableEvent(TID) {
+                    @Override
+                    public EventType getEventType() {
+                        return EventType.SCHEMA_CHANGE_UPDATE_COLUMNS;
+                    }
+                };
+        unknown.setChangeAfter(apply(baseTable(), composite(addAge())));
+
+        TransformException error =
+                Assertions.assertThrows(
+                        TransformException.class, () -> transform.mapSchemaChangeEvent(unknown));
+
+        Assertions.assertEquals(
+                TransformCommonErrorCode.SQL_SCHEMA_CHANGE_INCOMPATIBLE,
+                error.getSeaTunnelErrorCode());
+        Assertions.assertTrue(error.getMessage().contains("unsupported"), error.getMessage());
+        Assertions.assertEquals(before, transform.getProducedCatalogTable().getTableSchema());
     }
 
     @Test

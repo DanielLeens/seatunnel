@@ -190,6 +190,8 @@ With this query an upstream `ADD COLUMN description` is absorbed, an upstream `M
 
 Lineage. Changes are attributed to output columns by the identity of the physical source column. One statement that renames a column and adds a new column with the old name (`ALTER TABLE t CHANGE a b INT, ADD COLUMN a INT`) renames the sink column and adds a new one; one statement that drops and re-creates a column (`ALTER TABLE t DROP COLUMN a, ADD COLUMN a BIGINT`) drops and re-creates the sink column, also when the query references `a` directly. A rename that is reverted in the same statement changes nothing.
 
+Failover. After a restore from a checkpoint or savepoint the source emits a restore event that carries the table as it was at the checkpoint. The SQL transform re-evaluates its query on that table, hands its own restored output on and derives no DDL from it, so DDL that was applied before the checkpoint is never executed twice on the sink. A DDL that arrives after the restore is translated against the restored state.
+
 ### Limits
 
 - Dropping or renaming a column that belongs to the primary key, a constraint key or the partition keys of the output fails the job with `TRANSFORM_COMMON-09`, because sinks cannot update keys through schema change events. Modifying such a column is supported.

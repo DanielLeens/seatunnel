@@ -190,6 +190,8 @@ transform {
 
 血缘。变更按物理源列的身份归属到输出列。同一条语句中先重命名再新增同名列（`ALTER TABLE t CHANGE a b INT, ADD COLUMN a INT`）会在 sink 上重命名旧列并新增一列；同一条语句中先删除再重建同名列（`ALTER TABLE t DROP COLUMN a, ADD COLUMN a BIGINT`）会在 sink 上删除并重建该列，即使查询直接引用了 `a`。同一条语句中改名后又改回原名，则不产生任何变更。
 
+故障恢复。从 checkpoint 或 savepoint 恢复后，source 会发出一个携带 checkpoint 时刻表结构的恢复事件。SQL transform 会基于该表结构重新计算查询，向下游传递自身恢复后的输出，并且不会由此推导任何 DDL，因此 checkpoint 之前已经执行过的 DDL 不会在 sink 上重复执行。恢复之后到达的 DDL 会基于恢复后的状态进行翻译。
+
 ### 限制
 
 - 删除或重命名属于输出主键、约束键或分区键的列会使作业以 `TRANSFORM_COMMON-09` 失败，因为 sink 无法通过模式变更事件更新键；修改这类列是支持的。

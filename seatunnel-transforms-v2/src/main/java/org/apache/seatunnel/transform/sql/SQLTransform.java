@@ -34,6 +34,7 @@ import org.apache.seatunnel.api.table.schema.event.AlterTableColumnsEvent;
 import org.apache.seatunnel.api.table.schema.event.AlterTableCommentEvent;
 import org.apache.seatunnel.api.table.schema.event.AlterTableEvent;
 import org.apache.seatunnel.api.table.schema.event.AlterTableNameEvent;
+import org.apache.seatunnel.api.table.schema.event.RestoreTableSchemaEvent;
 import org.apache.seatunnel.api.table.schema.event.SchemaChangeEvent;
 import org.apache.seatunnel.api.table.type.SeaTunnelDataType;
 import org.apache.seatunnel.api.table.type.SeaTunnelRow;
@@ -435,6 +436,15 @@ public class SQLTransform extends AbstractCatalogSupportFlatMapTransform
         }
     }
 
+    /**
+     * Handles events without column-level sub-events: an empty composite, a table rename and a
+     * table comment are forwarded unchanged (the comment is applied to the input); the restore
+     * event emitted after a failover resynchronises the input; anything else is unsupported.
+     *
+     * @param event table-level event
+     * @param ctx staged hand-off context, or null at chain position zero
+     * @return the event to forward
+     */
     private SchemaChangeEvent mapTableLevelEvent(AlterTableEvent event, PendingSchemaChange ctx) {
         if (event instanceof AlterTableColumnsEvent
                 || event instanceof AlterTableNameEvent
@@ -447,14 +457,17 @@ public class SQLTransform extends AbstractCatalogSupportFlatMapTransform
             }
             return event;
         }
-        if (event.getChangeAfter() == null) {
+        if (!(event instanceof RestoreTableSchemaEvent)) {
             throw incompatible(
                     event, "unsupported schema change event " + event.getClass().getName(), null);
         }
-        // Any other table-level event that carries the whole table, such as the restore event
-        // emitted after a failover, resynchronises the input. No DDL is derived from it.
+        // The restore event carries the table as it was at the checkpoint. It only resynchronises
+        // the input: no DDL is derived from it, because the DDL it reflects was applied before the
+        // checkpoint, and the produced table is handed on as this transform's own restored output.
         CatalogTable restored =
-                CatalogTable.of(inputCatalogTable.getTableId(), event.getChangeAfter());
+                CatalogTable.of(
+                        inputCatalogTable.getTableId(),
+                        ((RestoreTableSchemaEvent) event).getRestoredTable());
         if (ctx != null && !restored.getTableSchema().equals(ctx.handedInput.getTableSchema())) {
             throw incompatible(event, UPSTREAM_MISMATCH, null);
         }
