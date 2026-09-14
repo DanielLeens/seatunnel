@@ -28,6 +28,7 @@ import org.apache.seatunnel.engine.client.job.ClientJobProxy;
 import org.apache.seatunnel.engine.common.config.ConfigProvider;
 import org.apache.seatunnel.engine.common.config.JobConfig;
 import org.apache.seatunnel.engine.common.config.SeaTunnelConfig;
+import org.apache.seatunnel.engine.common.exception.JobException;
 import org.apache.seatunnel.engine.common.exception.SeaTunnelEngineException;
 import org.apache.seatunnel.engine.common.job.JobResult;
 import org.apache.seatunnel.engine.common.job.JobStatus;
@@ -63,6 +64,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.regex.Pattern;
 
 import static org.apache.seatunnel.shade.com.google.common.base.Preconditions.checkArgument;
 
@@ -81,6 +83,25 @@ public class SplitClusterFaultToleranceIT {
             "dynamic_test_row_num_per_parallelism";
 
     public static final String DYNAMIC_TEST_PARALLELISM = "dynamic_test_parallelism";
+
+    /**
+     * Root-cause marker of the only FAILED outcome that {@link
+     * #testStreamJobCancelResolvesWhenWorkerCrashesBeforeCancelAck()} may legitimately produce: the
+     * {@code JobException} that {@code CoordinatorService#makeTasksFailed}
+     * (CoordinatorService.java:2143-2146) attaches when it resolves a vertex whose worker left the
+     * cluster. {@code TaskExecutionState} stores that exception as its full stack-trace text
+     * (TaskExecutionState.java:32-40, via {@code ExceptionUtils#getMessage}), and the text travels
+     * unchanged up to {@code JobResult#getError()} through {@code
+     * PhysicalVertex#updateStateByExecutionService} (PhysicalVertex.java:540), {@code
+     * SubPlan#addPhysicalVertexCallBack} (SubPlan.java:217-218), {@code
+     * PhysicalPlan#addPipelineEndCallback} (PhysicalPlan.java:162) and {@code
+     * JobMaster#initStateFuture} (JobMaster.java:496-498). The message format is unique to that one
+     * call site, so matching it pins the accepted failure to the lost-worker path and nothing else.
+     */
+    private static final Pattern LOST_WORKER_TASK_FAILURE_MARKER =
+            Pattern.compile(
+                    Pattern.quote(JobException.class.getName())
+                            + ": The taskGroup\\(.+\\) deployed node\\(.+\\) offline");
 
     @Test
     public void testBatchJobRunOk() throws Exception {
@@ -348,17 +369,53 @@ public class SplitClusterFaultToleranceIT {
      * The fix added a fallback right after the retry loop: if the loop exits with the ack still
      * missing and the vertex is still CANCELING, mark it CANCELED locally.
      *
-     * <p>{@code CoordinatorService#failedTaskOnMemberRemoved} also matches CANCELING tasks when a
-     * member is lost, but it cannot be the one to save this race: {@code PhysicalVertex#cancel},
-     * {@code #updateTaskState} and {@code #stateProcess} are all {@code synchronized} on the vertex
-     * itself, and the whole call chain down into {@code noticeTaskExecutionServiceCancel} runs
-     * without releasing that lock. A competing {@code failedTaskOnMemberRemoved} call has to go
-     * through the same {@code synchronized updateTaskState}, so it can only run after the
-     * cancelling thread has already returned - by which point the fixed code has already resolved
-     * the vertex to CANCELED, and the end-state consistency check inside {@code updateTaskState}
-     * rejects any later attempt to move a terminal-state task to FAILED. So the fixed method's own
-     * fallback is the sole, deterministic mechanism that unsticks this specific race, which is why
-     * this test asserts CANCELED rather than FAILED as the outcome.
+     * <p>The invariant this test guards is that a cancel issued while the worker dies before the
+     * cancel round-trip completes still resolves the job to a terminal state instead of hanging in
+     * CANCELING forever. Which terminal state that is depends on which side of the cancel ack the
+     * worker loss lands on, and both are legitimate outcomes of the engine as it stands:
+     *
+     * <ul>
+     *   <li>Worker gone <em>before</em> the ack: the {@code CancelTaskOperation} invocation fails,
+     *       the retry loop in {@code PhysicalVertex#noticeTaskExecutionServiceCancel}
+     *       (PhysicalVertex.java:426-456) exits once the member is no longer in the cluster, and
+     *       the #10729 fallback (PhysicalVertex.java:458-464) marks the vertex CANCELED locally.
+     *       With every vertex CANCELED, {@code SubPlan#getPipelineEndState} (SubPlan.java:250-251)
+     *       ends the pipeline CANCELED and the job ends CANCELED.
+     *   <li>Worker gone <em>after</em> the ack: the ack is immediate, because {@code
+     *       TaskExecutionService#cancelTaskGroup} (TaskExecutionService.java:810-825) only cancels
+     *       the task's cancellation future and returns, so {@code invoke().get()}
+     *       (PhysicalVertex.java:435-443) has already returned normally with the vertex still
+     *       CANCELING and waiting for a {@code NotifyTaskStatusOperation} the dead worker will
+     *       never send. That vertex is resolved by the Hazelcast membership event instead: {@code
+     *       SeaTunnelServer#memberRemoved} (SeaTunnelServer.java:263-266) -> {@code
+     *       CoordinatorService#memberRemoved} (CoordinatorService.java:2151-2156) -> {@code
+     *       #failedTaskOnMemberRemoved} -> {@code #makeTasksFailed}
+     *       (CoordinatorService.java:2127-2149), which explicitly matches CANCELING vertices
+     *       deployed on the lost address and marks them FAILED with {@code JobException("The
+     *       taskGroup(...) deployed node(...) offline")}. One such vertex makes {@code
+     *       failedTaskNum > 0}, so {@code SubPlan#getPipelineEndState} (SubPlan.java:245-246)
+     *       overrides the pipeline's end state to FAILED even though every other vertex reported
+     *       CANCELED; {@code PhysicalPlan#addPipelineEndCallback} (PhysicalPlan.java:159-176) turns
+     *       that into a FAILED job, and the job goes CANCELING -> FAILING -> FAILED carrying that
+     *       {@code JobException} text as {@code JobResult#getError()} (PhysicalPlan.java:415,
+     *       JobMaster.java:496-498).
+     * </ul>
+     *
+     * <p>The second window is the one CI hits: the engine-v2-it logs of fork run 34578232162 and of
+     * dev's own run 34801745423 both show the SplitEnumerator vertex ending FAILED through exactly
+     * that {@code makeTasksFailed} stack, while the reader vertices had already resolved CANCELED
+     * through the first window and then rejected the later FAILED ("Task is trying to leave
+     * terminal state CANCELED"). An earlier version of this Javadoc argued that {@code
+     * failedTaskOnMemberRemoved} could never win because the cancel chain holds the vertex lock;
+     * that only holds for the un-acked window. {@link
+     * #assertCancelResolvesToCanceledOrLostWorkerFailed} therefore accepts CANCELED, or FAILED
+     * whose {@code JobResult#getError()} carries the lost-worker {@code JobException} marker, and
+     * fails loudly on any other status or any other failure cause. The checkpoint-coordinator
+     * override in {@code SubPlan#getPipelineEndState} (SubPlan.java:254-259) is deliberately not
+     * accepted: {@code SubPlan#cancelPipeline} (SubPlan.java:406-411) completes the coordinator as
+     * CANCELED before the vertices are cancelled, after which {@code
+     * CheckpointCoordinator#handleCoordinatorError} (CheckpointCoordinator.java:345-347) can no
+     * longer flip it to FAILED, so that path is unreachable once the cancel has been issued.
      *
      * <p>No existing fault-tolerance test combines "cancel requested" with "worker crashes before
      * the cancel ack arrives": {@link #testStreamJobRunOk()} cancels a job on a fully healthy
@@ -445,7 +502,7 @@ public class SplitClusterFaultToleranceIT {
 
             CompletableFuture<JobResult> waitForCompleteFuture =
                     CompletableFuture.supplyAsync(clientJobProxy::waitForJobCompleteV2);
-            assertEventuallyCanceled(clientJobProxy, waitForCompleteFuture);
+            assertCancelResolvesToCanceledOrLostWorkerFailed(clientJobProxy, waitForCompleteFuture);
 
             Assertions.assertDoesNotThrow(
                     () -> cancelInvocation.get(30, TimeUnit.SECONDS),
@@ -544,30 +601,59 @@ public class SplitClusterFaultToleranceIT {
     }
 
     /**
-     * Waits for the job to reach a terminal state and asserts it is CANCELED, using the
-     * already-in-flight {@code waitForJobCompleteV2()} future so this assertion cannot itself hang
-     * forever if the CANCELING-stuck regression this test guards against were to reappear.
+     * Waits for the job to reach a terminal state, using the already-in-flight {@code
+     * waitForJobCompleteV2()} future so this assertion cannot itself hang forever if the
+     * CANCELING-stuck regression this test guards against were to reappear, and then accepts
+     * exactly two outcomes: CANCELED (worker lost before the cancel ack, resolved by the #10729
+     * fallback) or FAILED whose {@code JobResult#getError()} matches {@link
+     * #LOST_WORKER_TASK_FAILURE_MARKER} (worker lost after the ack, resolved by {@code
+     * CoordinatorService#makeTasksFailed}). FINISHED, UNKNOWABLE, a FAILED with any other cause, or
+     * no terminal state within the bound all fail with the full status and error, so a new
+     * regression cannot hide behind the accepted FAILED. The 60s bound is unchanged: both accepted
+     * paths resolve as soon as Hazelcast processes the member removal, and every CI failure this
+     * replaces had already reached FAILED inside that bound (the assertion that tripped was the
+     * status comparison, not the terminal-state wait).
      */
-    private static void assertEventuallyCanceled(
-            ClientJobProxy clientJobProxy, CompletableFuture<JobResult> waitForCompleteFuture) {
+    private static void assertCancelResolvesToCanceledOrLostWorkerFailed(
+            ClientJobProxy clientJobProxy, CompletableFuture<JobResult> waitForCompleteFuture)
+            throws Exception {
         Awaitility.await()
                 .atMost(60, TimeUnit.SECONDS)
                 .pollInterval(500, TimeUnit.MILLISECONDS)
                 .untilAsserted(
-                        () -> {
-                            Assertions.assertTrue(
-                                    waitForCompleteFuture.isDone(),
-                                    "Job should reach a terminal state instead of staying stuck "
-                                            + "in CANCELING after its worker crashed mid-cancel");
-                            Assertions.assertEquals(
-                                    JobStatus.CANCELED, waitForCompleteFuture.get().getStatus());
-                        });
+                        () ->
+                                Assertions.assertTrue(
+                                        waitForCompleteFuture.isDone(),
+                                        "Job should reach a terminal state instead of staying stuck "
+                                                + "in CANCELING after its worker crashed mid-cancel"));
+        JobResult jobResult = waitForCompleteFuture.get();
+        JobStatus terminalStatus = jobResult.getStatus();
+        String error = jobResult.getError();
+        if (JobStatus.CANCELED.equals(terminalStatus)) {
+            log.info("Cancel resolved to CANCELED: the worker was lost before the cancel ack");
+        } else if (JobStatus.FAILED.equals(terminalStatus)
+                && error != null
+                && LOST_WORKER_TASK_FAILURE_MARKER.matcher(error).find()) {
+            log.info(
+                    "Cancel resolved to FAILED through the lost-worker path "
+                            + "(CoordinatorService#makeTasksFailed): the worker was lost after the "
+                            + "cancel ack, error: {}",
+                    error);
+        } else {
+            Assertions.fail(
+                    "Cancel must resolve to CANCELED, or to FAILED caused only by the lost-worker "
+                            + "JobException from CoordinatorService#makeTasksFailed, but the job "
+                            + "ended "
+                            + terminalStatus
+                            + " with error: "
+                            + error);
+        }
         Awaitility.await()
                 .atMost(30, TimeUnit.SECONDS)
                 .untilAsserted(
                         () ->
                                 Assertions.assertEquals(
-                                        JobStatus.CANCELED, clientJobProxy.getJobStatus()));
+                                        terminalStatus, clientJobProxy.getJobStatus()));
     }
 
     @Test
