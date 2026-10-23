@@ -13,8 +13,8 @@ import ChangeLog from '../changelog/connector-jdbc.md';
 ## Description
 
 The PostgreSQL Sink connector writes rows to a PostgreSQL database through the JDBC driver.
-It supports both batch and streaming jobs, parallel writers split by an optional
-`partition_column`, and exactly-once semantics through XA transactions.
+It supports both batch and streaming jobs, concurrent writers configured through
+`parallelism`, and exactly-once semantics through XA transactions.
 
 Use this connector when the upstream data lands in a relational store and the target table
 follows the standard PostgreSQL type system described in the data type mapping section below.
@@ -39,7 +39,6 @@ plain bulk-loading workloads.
 - [x] [exactly-once](../../introduction/concepts/connector-v2-features.md)
 - [x] [cdc](../../introduction/concepts/connector-v2-features.md)
 - [x] [support multiple table write](../../introduction/concepts/connector-v2-features.md)
-- [x] [parallelism](../../introduction/concepts/connector-v2-features.md)
 - [x] [timer flush](../../introduction/concepts/connector-v2-features.md)
 
 Exactly-once is achieved through XA transactions and is only available when the target
@@ -151,9 +150,9 @@ When data_save_mode selects CUSTOM_PROCESSING, you should fill in the CUSTOM_SQL
 
 ### Tips
 
-> If `partition_column` is not set, the sink runs in single concurrency. When it is set,
-> the connector writes in parallel according to the configured parallelism, splitting rows
-> by the partition column's value range.
+> Sink concurrency is controlled by the configured `parallelism`. Each writer processes
+> the rows routed to it by upstream operators. `partition_column` is a JDBC source option
+> and does not control sink concurrency or split rows for writing.
 
 ## Task Example
 

@@ -13,7 +13,7 @@ import ChangeLog from '../changelog/connector-jdbc.md';
 ## 描述
 
 PostgreSQL Sink 连接器通过 JDBC 驱动将行写入 PostgreSQL 数据库。支持批处理模式和流式模式，
-并通过可选的 `partition_column` 将写入拆分成并行任务，同时通过 XA 事务保证精确一次语义。
+可通过 `parallelism` 配置并发写入，并通过 XA 事务保证精确一次语义。
 
 当上游数据需要落到关系型数据库，并且目标表遵循下方“数据类型映射”小节中描述的标准 PostgreSQL
 类型体系时，可以使用该连接器。它既可以写入固定的 `database.table`，也可以根据 schema 自动生成
@@ -36,7 +36,6 @@ PostgreSQL Sink 连接器通过 JDBC 驱动将行写入 PostgreSQL 数据库。�
 - [x] [精确一次](../../introduction/concepts/connector-v2-features.md)
 - [x] [变更数据捕获（CDC）](../../introduction/concepts/connector-v2-features.md)
 - [x] [支持多表写入](../../introduction/concepts/connector-v2-features.md)
-- [x] [并行写入](../../introduction/concepts/connector-v2-features.md)
 - [x] [定时刷新](../../introduction/concepts/connector-v2-features.md)
 
 精确一次通过 XA 事务实现，只有目标数据库支持 XA 事务时才可用。需要设置
@@ -144,8 +143,8 @@ PostgreSQL Sink 连接器通过 JDBC 驱动将行写入 PostgreSQL 数据库。�
 
 ### 提示
 
-> 如果没有设置 `partition_column`，则会以单并发方式运行；一旦设置了，连接器就会按照配置的并行度
-> 并行写入，并通过分区列的值范围划分行。
+> Sink 的并发度由配置的 `parallelism` 控制，每个 writer 处理上游算子路由给它的数据行。
+> `partition_column` 是 JDBC Source 的配置项，不控制 Sink 并发度，也不用于划分待写入的数据行。
 
 ## 任务示例
 
