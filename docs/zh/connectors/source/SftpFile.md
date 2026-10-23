@@ -194,10 +194,9 @@ abc.*
 
 :::caution
 
-FIXME: translation pending, English text follows.
-External resources referenced by XML files (`file_format_type = xml`), such as external DTDs and external entities, are never resolved and are replaced with empty content.
-XML files with a `<!DOCTYPE ...>` declaration are tolerated as long as they do not rely on any external content.
-There is no configuration option to enable external resource resolution.
+XML 文件（`file_format_type = xml`）中引用的外部资源（如外部 DTD 和外部实体）不会被解析，而是被替换为空内容。
+带有 `<!DOCTYPE ...>` 声明的 XML 文件仍可读取，只要文件不依赖任何外部内容。
+该行为没有配置项可以开启外部资源解析。
 
 :::
 
