@@ -297,10 +297,12 @@ public class CouchbaseIT extends TestSuiteBase implements TestResource {
                         ? HostConfig.newHostConfig()
                         : command.getHostConfig();
         hostConfig.withUlimits(
-                new Ulimit(
-                        "nofile",
-                        COUCHBASE_CONTAINER_NOFILE_LIMIT,
-                        COUCHBASE_CONTAINER_NOFILE_LIMIT));
+                new Ulimit[] {
+                    new Ulimit(
+                            "nofile",
+                            COUCHBASE_CONTAINER_NOFILE_LIMIT,
+                            COUCHBASE_CONTAINER_NOFILE_LIMIT)
+                });
         command.withHostConfig(hostConfig);
     }
 }
