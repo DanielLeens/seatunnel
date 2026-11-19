@@ -26,6 +26,8 @@ import org.apache.seatunnel.engine.server.execution.TaskGroupLocation;
 import org.apache.seatunnel.engine.server.execution.TaskLocation;
 import org.apache.seatunnel.engine.server.master.cleanup.PipelineCleanupRecord;
 import org.apache.seatunnel.engine.server.metrics.SeaTunnelMetricsContext;
+import org.apache.seatunnel.engine.server.task.operation.ReportMetricsOperation;
+import org.apache.seatunnel.engine.server.utils.NodeEngineUtil;
 
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
@@ -371,6 +373,72 @@ class CoordinatorServicePipelineCleanupTest extends AbstractSeaTunnelServerTest 
 
         Assertions.assertFalse(hasMetricsForPipeline(pipelineLocation));
         Assertions.assertFalse(pendingCleanupIMap.containsKey(pipelineLocation));
+    }
+
+    @Test
+    void testFailedPipelinePurgesMetricsAgainAfterWorkerCleanup() {
+        CoordinatorService coordinatorService = awaitActiveCoordinatorService();
+        long jobId = instance.getFlakeIdGenerator("test").newId();
+        PipelineLocation pipeline = new PipelineLocation(jobId, 1);
+        PipelineLocation otherPipeline = new PipelineLocation(jobId, 2);
+        TaskGroupLocation taskGroup = new TaskGroupLocation(jobId, 1, 1L);
+        Address localWorker = instance.getCluster().getLocalMember().getAddress();
+        IMap<PipelineLocation, PipelineCleanupRecord> pending =
+                instance.getMap(Constant.IMAP_PENDING_PIPELINE_CLEANUP);
+
+        PipelineCleanupRecord record =
+                newPipelineCleanupRecord(pipeline, PipelineStatus.FAILED, false);
+        record.setTaskGroups(Collections.singletonMap(taskGroup, localWorker));
+        // An earlier cleanup pass purged the store while this worker was still unacknowledged.
+        record.setMetricsImapCleaned(true);
+        pending.put(pipeline, record);
+        upsertMetricsForPipeline(pipeline);
+        upsertMetricsForPipeline(otherPipeline);
+
+        coordinatorService.processPendingPipelineCleanup(pipeline, record);
+
+        Assertions.assertFalse(pending.containsKey(pipeline));
+        Assertions.assertFalse(hasMetricsForPipeline(pipeline));
+        Assertions.assertTrue(hasMetricsForPipeline(otherPipeline));
+    }
+
+    @Test
+    void testLateWorkerReportCannotRestoreFailedPipelineMetrics() throws Exception {
+        long jobId = instance.getFlakeIdGenerator("test").newId();
+        PipelineLocation failed = new PipelineLocation(jobId, 1);
+        PipelineLocation running = new PipelineLocation(jobId, 2);
+        IMap<Object, Object> runningStates = instance.getMap(Constant.IMAP_RUNNING_JOB_STATE);
+        runningStates.put(failed, PipelineStatus.FAILED);
+        runningStates.put(running, PipelineStatus.RUNNING);
+
+        try {
+            Map<TaskLocation, SeaTunnelMetricsContext> snapshot = new HashMap<>();
+            snapshot.put(
+                    new TaskLocation(new TaskGroupLocation(jobId, 1, 1L), 0, 0),
+                    new SeaTunnelMetricsContext());
+            snapshot.put(
+                    new TaskLocation(new TaskGroupLocation(jobId, 2, 1L), 0, 0),
+                    new SeaTunnelMetricsContext());
+            Address localWorker = instance.getCluster().getLocalMember().getAddress();
+
+            NodeEngineUtil.sendOperationToMemberNode(
+                            nodeEngine, new ReportMetricsOperation(snapshot), localWorker)
+                    .get(10, TimeUnit.SECONDS);
+            Assertions.assertFalse(hasMetricsForPipeline(failed));
+            Assertions.assertTrue(hasMetricsForPipeline(running));
+
+            // A late report can also arrive after runtime state has been cleaned.
+            runningStates.remove(failed);
+            NodeEngineUtil.sendOperationToMemberNode(
+                            nodeEngine, new ReportMetricsOperation(snapshot), localWorker)
+                    .get(10, TimeUnit.SECONDS);
+            Assertions.assertFalse(hasMetricsForPipeline(failed));
+            Assertions.assertTrue(hasMetricsForPipeline(running));
+        } finally {
+            runningStates.remove(failed);
+            runningStates.remove(running);
+            server.removeMetrics(running);
+        }
     }
 
     private void upsertMetricsForPipeline(PipelineLocation pipelineLocation) {

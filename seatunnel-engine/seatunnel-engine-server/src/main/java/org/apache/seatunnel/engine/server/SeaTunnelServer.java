@@ -27,6 +27,7 @@ import org.apache.seatunnel.engine.common.exception.SeaTunnelEngineException;
 import org.apache.seatunnel.engine.common.exception.SeaTunnelEngineRetryableException;
 import org.apache.seatunnel.engine.core.classloader.ClassLoaderService;
 import org.apache.seatunnel.engine.core.classloader.DefaultClassLoaderService;
+import org.apache.seatunnel.engine.core.job.PipelineStatus;
 import org.apache.seatunnel.engine.server.checkpoint.monitor.CheckpointMonitorService;
 import org.apache.seatunnel.engine.server.common.SeaTunnelEngineContext;
 import org.apache.seatunnel.engine.server.common.statestore.EngineStateStores;
@@ -36,6 +37,7 @@ import org.apache.seatunnel.engine.server.dag.physical.PipelineLocation;
 import org.apache.seatunnel.engine.server.execution.ExecutionState;
 import org.apache.seatunnel.engine.server.execution.TaskGroupLocation;
 import org.apache.seatunnel.engine.server.execution.TaskLocation;
+import org.apache.seatunnel.engine.server.master.cleanup.PipelineCleanupRecord;
 import org.apache.seatunnel.engine.server.metrics.SeaTunnelMetricsContext;
 import org.apache.seatunnel.engine.server.observability.RealtimeMetricsService;
 import org.apache.seatunnel.engine.server.resourcemanager.ResourceManagerFactory;
@@ -64,6 +66,7 @@ import lombok.NonNull;
 import lombok.extern.slf4j.Slf4j;
 
 import java.sql.DriverManager;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.Properties;
 import java.util.concurrent.Executors;
@@ -446,6 +449,40 @@ public class SeaTunnelServer
         MetricsSnapshotStateStore metricsSnapshotStateStore =
                 engineContext.getStateStores().metricsSnapshotStore();
         metricsSnapshotStateStore.merge(localMap);
+    }
+
+    /**
+     * Applies Worker snapshots only while their pipeline accepts running metrics. The distributed
+     * cleanup lock orders an in-flight merge before the final purge, even when the report runs on a
+     * former Master that is still a cluster member. A report that acquires the lock after the purge
+     * sees FAILED or no runtime state.
+     */
+    public void updateReportedMetrics(Map<TaskLocation, SeaTunnelMetricsContext> snapshot) {
+        IMap<Object, Object> runningStates =
+                nodeEngine.getHazelcastInstance().getMap(Constant.IMAP_RUNNING_JOB_STATE);
+        IMap<PipelineLocation, PipelineCleanupRecord> pendingCleanup =
+                nodeEngine.getHazelcastInstance().getMap(Constant.IMAP_PENDING_PIPELINE_CLEANUP);
+        Map<PipelineLocation, Map<TaskLocation, SeaTunnelMetricsContext>> byPipeline =
+                new HashMap<>();
+        snapshot.forEach(
+                (task, metrics) ->
+                        byPipeline
+                                .computeIfAbsent(
+                                        task.getTaskGroupLocation().getPipelineLocation(),
+                                        ignored -> new HashMap<>())
+                                .put(task, metrics));
+        byPipeline.forEach(
+                (pipeline, metrics) -> {
+                    pendingCleanup.lock(pipeline);
+                    try {
+                        Object status = runningStates.get(pipeline);
+                        if (status instanceof PipelineStatus && status != PipelineStatus.FAILED) {
+                            updateMetrics(metrics);
+                        }
+                    } finally {
+                        pendingCleanup.unlock(pipeline);
+                    }
+                });
     }
 
     public void removeMetrics(PipelineLocation pipelineLocation) {

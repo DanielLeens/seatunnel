@@ -165,7 +165,7 @@ public class ServerConfigOptions {
         public static final Option<Integer> JOB_METRICS_PARTITION_COUNT =
                 Options.key("job-metrics-partition-count")
                         .intType()
-                        .defaultValue(1)
+                        .defaultValue(10)
                         .withDescription("Number of partitions for storing job metrics in IMap.");
         /////////////////////////////////////////////////
         // The options about Hazelcast IMAP store start

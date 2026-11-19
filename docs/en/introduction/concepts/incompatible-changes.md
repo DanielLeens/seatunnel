@@ -5,6 +5,10 @@ You need to check this document before you upgrade to related version.
 
 ## dev
 
+### Zeta: the default number of job metrics partitions is now 10
+
+If your cluster used the previous default, set `seatunnel.engine.job-metrics-partition-count: 1` on every Master and Worker node before upgrading with running jobs. The partition count determines where runtime snapshots are stored and read, so changing it while jobs are running can hide their existing snapshots. To adopt 10 partitions, finish or stop the running jobs first, and restart the cluster with the same count on all Master and Worker nodes.
+
 ### Http sink: `array_mode = true` sends each row as a JSON object
 
 - **Behavior change: the elements of the request body are JSON objects instead of strings**

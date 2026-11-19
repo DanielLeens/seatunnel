@@ -209,11 +209,11 @@ seatunnel:
       max-thread-num: 1000
 ```
 
-### 4.8 Job Metrics Partition Count (This parameter is invalid on the Worker node)
+### 4.8 Job Metrics Partition Count
 
 A new configuration option JOB_METRICS_PARTITION_COUNT controls the number of partitions used to store running job metrics in Hazelcast IMap.
 
-- Default: 1 (single key, backward compatible)
+- Default: 10. Set this option consistently on every Master and Worker node.
 
 - Usage: Increase this value to distribute metrics across multiple partitions and reduce contention when many tasks update metrics concurrently.
 

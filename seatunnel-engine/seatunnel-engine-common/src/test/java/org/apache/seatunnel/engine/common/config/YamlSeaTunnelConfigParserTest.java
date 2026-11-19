@@ -28,11 +28,25 @@ import org.junit.jupiter.api.Test;
 import com.hazelcast.client.config.ClientConfig;
 import com.hazelcast.client.config.YamlClientConfigBuilder;
 
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 
 import static com.hazelcast.internal.config.DeclarativeConfigUtil.YAML_ACCEPTED_SUFFIXES;
 
 public class YamlSeaTunnelConfigParserTest {
+
+    @Test
+    void testExplicitMetricsPartitionCountOverridesDefault() {
+        String yaml = "seatunnel:\n  engine:\n    job-metrics-partition-count: 1\n";
+        SeaTunnelConfig config =
+                new YamlSeaTunnelConfigBuilder(
+                                new ByteArrayInputStream(yaml.getBytes(StandardCharsets.UTF_8)))
+                        .setProperties(null)
+                        .build();
+
+        Assertions.assertEquals(1, config.getEngineConfig().getJobMetricsPartitionCount());
+    }
 
     @Test
     public void testSeaTunnelConfig() {
@@ -47,6 +61,7 @@ public class YamlSeaTunnelConfigParserTest {
         Assertions.assertNotNull(config);
 
         Assertions.assertEquals(1, config.getEngineConfig().getBackupCount());
+        Assertions.assertEquals(10, config.getEngineConfig().getJobMetricsPartitionCount());
 
         Assertions.assertEquals(2, config.getEngineConfig().getPrintExecutionInfoInterval());
 

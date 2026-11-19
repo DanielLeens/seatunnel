@@ -22,9 +22,13 @@ import org.apache.seatunnel.engine.server.execution.TaskLocation;
 import org.apache.seatunnel.engine.server.metrics.SeaTunnelMetricsContext;
 import org.apache.seatunnel.engine.server.serializable.TaskDataSerializerHook;
 
+import com.hazelcast.instance.impl.OutOfMemoryErrorDispatcher;
 import com.hazelcast.nio.ObjectDataInput;
 import com.hazelcast.nio.ObjectDataOutput;
 import com.hazelcast.nio.serialization.IdentifiedDataSerializable;
+import com.hazelcast.spi.impl.executionservice.ExecutionService;
+import com.hazelcast.spi.impl.operationservice.CallStatus;
+import com.hazelcast.spi.impl.operationservice.Offload;
 
 import java.io.IOException;
 import java.util.HashMap;
@@ -40,10 +44,37 @@ public class ReportMetricsOperation extends TracingOperation implements Identifi
     }
 
     @Override
+    public CallStatus call() throws Exception {
+        if (localMap == null || localMap.isEmpty()) {
+            return CallStatus.RESPONSE;
+        }
+        // Cleanup holds the pipeline lock while waiting for a Worker RPC. Keep Hazelcast operation
+        // threads available to process that RPC even when reports are waiting for the lock.
+        return new Offload(this) {
+            @Override
+            public void start() {
+                executionService.execute(
+                        ExecutionService.OFFLOADABLE_EXECUTOR,
+                        () -> {
+                            Object response = null;
+                            try {
+                                ReportMetricsOperation.this.run();
+                            } catch (Throwable failure) {
+                                OutOfMemoryErrorDispatcher.inspectOutOfMemoryError(failure);
+                                logError(failure);
+                                response = failure;
+                            }
+                            sendResponse(response);
+                        });
+            }
+        };
+    }
+
+    @Override
     public void runInternal() throws Exception {
         SeaTunnelServer seaTunnelServer = getService();
         if (localMap != null) {
-            seaTunnelServer.updateMetrics(localMap);
+            seaTunnelServer.updateReportedMetrics(localMap);
         }
     }
 

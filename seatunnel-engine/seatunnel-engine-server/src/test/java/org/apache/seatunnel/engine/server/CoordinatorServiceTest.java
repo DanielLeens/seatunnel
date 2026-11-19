@@ -1266,9 +1266,14 @@ public class CoordinatorServiceTest {
 
         try {
             NodeEngineImpl nodeEngine = instance1.node.getNodeEngine();
+            TaskGroupLocation taskGroup = new TaskGroupLocation(1L, 1, 1L);
+            nodeEngine
+                    .getHazelcastInstance()
+                    .getMap(Constant.IMAP_RUNNING_JOB_STATE)
+                    .put(taskGroup.getPipelineLocation(), PipelineStatus.RUNNING);
             Map<TaskLocation, SeaTunnelMetricsContext> localMap = new HashMap<>();
             for (int i = 0; i < 100; i++) {
-                TaskLocation taskLocation = new TaskLocation();
+                TaskLocation taskLocation = new TaskLocation(taskGroup, 0, 0);
                 taskLocation.setTaskID(i);
                 localMap.put(taskLocation, new SeaTunnelMetricsContext());
             }
@@ -2087,9 +2092,14 @@ public class CoordinatorServiceTest {
         ExecutorService executor = Executors.newFixedThreadPool(32);
         try {
             NodeEngineImpl nodeEngine = instance2.node.getNodeEngine();
+            TaskGroupLocation taskGroup = new TaskGroupLocation(1L, 1, 1L);
+            nodeEngine
+                    .getHazelcastInstance()
+                    .getMap(Constant.IMAP_RUNNING_JOB_STATE)
+                    .put(taskGroup.getPipelineLocation(), PipelineStatus.RUNNING);
             Map<TaskLocation, SeaTunnelMetricsContext> localMap = new HashMap<>();
             for (int i = 0; i < 20000; i++) {
-                TaskLocation taskLocation = new TaskLocation();
+                TaskLocation taskLocation = new TaskLocation(taskGroup, 0, 0);
                 taskLocation.setTaskID(i);
                 localMap.put(taskLocation, new SeaTunnelMetricsContext());
             }

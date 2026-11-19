@@ -747,16 +747,20 @@ public class CoordinatorService {
             updated.setLastAttemptTimeMillis(now);
             updated.setAttemptCount(record.getAttemptCount() + 1);
 
-            if (!updated.isMetricsImapCleaned() && cleanupPipelineMetrics(pipelineLocation)) {
+            Map<TaskGroupLocation, Address> taskGroups = updated.getTaskGroups();
+            boolean failed = PipelineStatus.FAILED.equals(updated.getFinalStatus());
+            boolean needsWorkerCleanup =
+                    !updated.getCleanedTaskGroups().containsAll(taskGroups.keySet());
+            if ((!failed || needsWorkerCleanup)
+                    && !updated.isMetricsImapCleaned()
+                    && cleanupPipelineMetrics(pipelineLocation)) {
                 updated.setMetricsImapCleaned(true);
             }
 
-            Map<TaskGroupLocation, Address> taskGroups = updated.getTaskGroups();
-            if (taskGroups != null && !taskGroups.isEmpty()) {
+            if (!taskGroups.isEmpty()) {
                 for (Map.Entry<TaskGroupLocation, Address> taskGroup : taskGroups.entrySet()) {
                     TaskGroupLocation taskGroupLocation = taskGroup.getKey();
-                    if (updated.getCleanedTaskGroups() != null
-                            && updated.getCleanedTaskGroups().contains(taskGroupLocation)) {
+                    if (updated.getCleanedTaskGroups().contains(taskGroupLocation)) {
                         continue;
                     }
                     Address workerAddress = taskGroup.getValue();
@@ -784,6 +788,12 @@ public class CoordinatorService {
                                 e);
                     }
                 }
+            }
+
+            // A previous pass may have purged the store before a worker finished reporting.
+            // A failed pipeline's record is complete only after the post-acknowledgment purge.
+            if (failed && updated.getCleanedTaskGroups().containsAll(taskGroups.keySet())) {
+                updated.setMetricsImapCleaned(cleanupPipelineMetrics(pipelineLocation));
             }
 
             boolean replaced = pendingCleanupIMap.replace(pipelineLocation, record, updated);

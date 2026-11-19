@@ -22,6 +22,7 @@ import org.apache.seatunnel.common.config.DeployMode;
 import org.apache.seatunnel.engine.client.SeaTunnelClient;
 import org.apache.seatunnel.engine.client.job.ClientJobExecutionEnvironment;
 import org.apache.seatunnel.engine.client.job.ClientJobProxy;
+import org.apache.seatunnel.engine.common.Constant;
 import org.apache.seatunnel.engine.common.config.ConfigProvider;
 import org.apache.seatunnel.engine.common.config.JobConfig;
 import org.apache.seatunnel.engine.common.config.SeaTunnelConfig;
@@ -32,7 +33,10 @@ import org.apache.seatunnel.engine.server.SeaTunnelServerStarter;
 import org.apache.seatunnel.engine.server.dag.physical.PipelineLocation;
 import org.apache.seatunnel.engine.server.execution.TaskGroupLocation;
 import org.apache.seatunnel.engine.server.execution.TaskLocation;
+import org.apache.seatunnel.engine.server.master.cleanup.PipelineCleanupRecord;
 import org.apache.seatunnel.engine.server.metrics.SeaTunnelMetricsContext;
+import org.apache.seatunnel.engine.server.task.operation.ReportMetricsOperation;
+import org.apache.seatunnel.engine.server.utils.NodeEngineUtil;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Assertions;
@@ -41,6 +45,7 @@ import org.junit.jupiter.api.Test;
 
 import com.hazelcast.client.config.ClientConfig;
 import com.hazelcast.instance.impl.HazelcastInstanceImpl;
+import com.hazelcast.map.IMap;
 import lombok.extern.slf4j.Slf4j;
 
 import java.util.HashMap;
@@ -48,6 +53,7 @@ import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 import static org.awaitility.Awaitility.await;
 
@@ -209,7 +215,7 @@ public class JobExecutionIT {
      */
     @Test
     public void testFailedPipelineMetricsAreCleanedUp()
-            throws ExecutionException, InterruptedException {
+            throws ExecutionException, InterruptedException, TimeoutException {
         Common.setDeployMode(DeployMode.CLIENT);
         String filePath = TestUtils.getResource("batch_fakesource_to_console_error.conf");
         JobConfig jobConfig = new JobConfig();
@@ -256,21 +262,37 @@ public class JobExecutionIT {
             JobResult result = clientJobProxy.getJobResultCache();
             Assertions.assertEquals(JobStatus.FAILED, result.getStatus());
 
-            // Bound generously above CoordinatorService#PIPELINE_CLEANUP_INTERVAL_SECONDS (60s):
-            // the scheduled safety net's first run can land anywhere in that window relative to
-            // when this pipeline actually failed.
+            IMap<PipelineLocation, PipelineCleanupRecord> pendingCleanup =
+                    hazelcastInstance.getMap(Constant.IMAP_PENDING_PIPELINE_CLEANUP);
+            // Wait for the Worker acknowledgments and the final purge, even if the best-effort
+            // purge has already made the metric disappear temporarily.
             await().atMost(120, TimeUnit.SECONDS)
                     .untilAsserted(
-                            () ->
-                                    Assertions.assertFalse(
-                                            seaTunnelServer
-                                                    .getEngineContext()
-                                                    .getStateStores()
-                                                    .metricsSnapshotStore()
-                                                    .containsPipeline(pipelineLocation),
-                                            "Metrics for a FAILED pipeline must eventually be "
-                                                    + "removed from the coordinator's metrics "
-                                                    + "IMap, not retained forever"));
+                            () -> {
+                                Assertions.assertFalse(
+                                        pendingCleanup.containsKey(pipelineLocation),
+                                        "Failed pipeline cleanup must complete");
+                                Assertions.assertFalse(
+                                        seaTunnelServer
+                                                .getEngineContext()
+                                                .getStateStores()
+                                                .metricsSnapshotStore()
+                                                .containsPipeline(pipelineLocation),
+                                        "Metrics must be absent after failed pipeline cleanup");
+                            });
+
+            NodeEngineUtil.sendOperationToMemberNode(
+                            hazelcastInstance.node.getNodeEngine(),
+                            new ReportMetricsOperation(seededMetrics),
+                            hazelcastInstance.getCluster().getLocalMember().getAddress())
+                    .get(15, TimeUnit.SECONDS);
+            Assertions.assertFalse(
+                    seaTunnelServer
+                            .getEngineContext()
+                            .getStateStores()
+                            .metricsSnapshotStore()
+                            .containsPipeline(pipelineLocation),
+                    "A late Worker report must not recreate failed-pipeline metrics");
         }
     }
 
