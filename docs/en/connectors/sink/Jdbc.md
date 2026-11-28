@@ -682,6 +682,25 @@ The secret_access_key in AWS authentication. Only valid for dialect="dsql"
 ### region [String]
 The area where Amazon Aurora DSQL is located. Only valid for dialect="dsql"
 
+## PostgreSQL batch INSERT tuning
+
+For non-XA PostgreSQL batch jobs that use plain INSERT into an existing table, measure the pgJDBC URL property `reWriteBatchedInserts=true` with the installed driver version. It lets the driver combine compatible batched INSERT statements into multi-row statements; it is not a SeaTunnel option or a transaction setting. The pgJDBC 42.5.1 default is `false`.
+
+Merge this fragment into the JDBC sink's existing connection and table configuration. Preserve its other URL properties, credentials and save modes:
+
+```hocon
+url = "jdbc:postgresql://localhost:5432/example?reWriteBatchedInserts=true"
+generate_sink_sql = true
+enable_upsert = false
+batch_size = 1000
+```
+
+The row count is a measurement starting point. Compare both settings with representative row widths, NULLs, Unicode, decimals, time values and binary data, and validate the final stored values and partial final batch. Larger batches increase client memory and the amount of work in a failed batch; the driver may split a batch according to its version and parameter limits.
+
+Restrict this comparison to plain INSERT. Rewriting changes SQL statement grouping, so verify any statement-level triggers, generated/default expressions, constraints and failure behavior before enabling it. Do not apply a plain INSERT result to custom SQL, conflict updates, DELETE, COPY or XA jobs. This property does not change SeaTunnel's commit, retry or checkpoint policy, and it does not guarantee a speedup for every workload.
+
+See the [pgJDBC connection properties](https://jdbc.postgresql.org/documentation/use/#connection-parameters). Confirm the property and limits against the installed driver rather than assuming that all 42.x versions behave identically.
+
 ## Exactly-once prerequisites
 
 When `is_exactly_once = true`, JDBC Sink uses XA transactions. Before enabling it:

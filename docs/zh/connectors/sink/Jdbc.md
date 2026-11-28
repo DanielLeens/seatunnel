@@ -677,6 +677,25 @@ AWS IAM 认证中所需要的secret_access_key。 该参考仅适用于 dialect=
 ### region [String]
 Amazon Aurora DSQL 所在的区域。 该参考仅适用于 dialect="dsql"
 
+## PostgreSQL 批量 INSERT 调优
+
+对于使用普通 INSERT 向已有表写入的非 XA PostgreSQL 批任务，可使用已安装的驱动版本实测 pgJDBC URL 属性 `reWriteBatchedInserts=true`。驱动会将兼容的批量 INSERT 合并为多行语句；该属性不是 SeaTunnel 配置项，也不是事务设置。pgJDBC 42.5.1 中的默认值为 `false`。
+
+将以下片段合并到 JDBC Sink 已有的连接和表配置中，保留其他 URL 属性、凭据及保存模式：
+
+```hocon
+url = "jdbc:postgresql://localhost:5432/example?reWriteBatchedInserts=true"
+generate_sink_sql = true
+enable_upsert = false
+batch_size = 1000
+```
+
+该行数仅作为实测起点。使用具有代表性的行宽、NULL、Unicode、小数、时间值和二进制数据对照开关，并核对最终落库值及不足一个完整批次的尾批。增大批次会增加客户端内存及一个失败批次涉及的工作量；驱动会根据版本和参数数量限制拆分批次。
+
+此处仅比较普通 INSERT。重写会改变 SQL 语句的分组，启用前应验证语句级触发器、生成列或默认表达式、约束及失败行为。不要将普通 INSERT 的结果推广到自定义 SQL、冲突更新、DELETE、COPY 或 XA 任务。该属性不改变 SeaTunnel 的提交、重试或检查点策略，也不保证对所有负载都加速。
+
+参考 [pgJDBC 连接属性](https://jdbc.postgresql.org/documentation/use/#connection-parameters)，以已安装的驱动核对属性和限制，不要假设所有 42.x 版本的行为相同。
+
 ## Exactly-once 前置条件
 
 `is_exactly_once = true` 时，JDBC Sink 使用 XA 事务。启用前请确认：
