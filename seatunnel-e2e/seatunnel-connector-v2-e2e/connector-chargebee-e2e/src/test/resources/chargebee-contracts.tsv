@@ -1,0 +1,41 @@
+# Licensed to the Apache Software Foundation (ASF) under one or more
+# contributor license agreements. See the NOTICE file distributed with
+# this work for additional information regarding copyright ownership.
+# The ASF licenses this file to You under the Apache License, Version 2.0
+# (the "License"); you may not use this file except in compliance with
+# the License. You may obtain a copy of the License at
+# http://www.apache.org/licenses/LICENSE-2.0
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# resource path envelope catalogs cursor mode sort deleted parent
+addon	/addons	addon	1.0	updated_at	month	-	yes	-
+attached_item	/items/{parent}/attached_items	attached_item	2.0	updated_at	single	-	no	item
+customer	/customers	customer	both	updated_at	month	updated_at	yes	-
+coupon	/coupons	coupon	both	updated_at	month	-	no	-
+contact	/customers/{parent}/contacts	contact	both	-	full	-	no	customer
+credit_note	/credit_notes	credit_note	both	updated_at	month	date	yes	-
+event	/events	event	both	occurred_at	month	occurred_at	no	-
+gift	/gifts	gift	both	updated_at	local	-	no	-
+order	/orders	order	both	updated_at	month	updated_at	yes	-
+hosted_page	/hosted_pages	hosted_page	both	updated_at	month	-	no	-
+invoice	/invoices	invoice	both	updated_at	month	updated_at	yes	-
+item	/items	item	2.0	updated_at	month	updated_at	no	-
+item_price	/item_prices	item_price	2.0	updated_at	month	updated_at	no	-
+plan	/plans	plan	1.0	updated_at	month	-	yes	-
+payment_source	/payment_sources	payment_source	both	updated_at	month	updated_at	yes	-
+promotional_credit	/promotional_credits	promotional_credit	both	created_at	month	-	no	-
+subscription	/subscriptions	subscription	both	updated_at	month	updated_at	yes	-
+subscription_with_scheduled_changes	/subscriptions/{parent}/retrieve_with_scheduled_changes	subscription	both	-	singleton	-	no	subscription
+transaction	/transactions	transaction	both	updated_at	month	updated_at	yes	-
+unbilled_charge	/unbilled_charges	unbilled_charge	both	updated_at	local	-	no	-
+virtual_bank_account	/virtual_bank_accounts	virtual_bank_account	both	updated_at	month	-	no	-
+quote	/quotes	quote	both	updated_at	month	date	yes	-
+quote_line_group	/quotes/{parent}/quote_line_groups	quote_line_group	both	-	full	-	no	quote
+site_migration_detail	/site_migration_details	site_migration_detail	both	migrated_at	local	-	no	-
+comment	/comments	comment	both	created_at	month	created_at	no	-
+item_family	/item_families	item_family	2.0	updated_at	month	-	no	-
+differential_price	/differential_prices	differential_price	2.0	updated_at	local	-	no	-
