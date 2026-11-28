@@ -70,6 +70,7 @@ connector-tiktok-ads
 connector-graphql
 connector-hive
 connector-http-base
+connector-http-clazar
 connector-mem0
 connector-http-asana
 connector-http-intercom
